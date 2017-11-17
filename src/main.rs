@@ -2,25 +2,81 @@
 
 extern crate rand;
 extern crate piston_window;
+extern crate conrod;
 mod postac;
 
 use std::collections::{HashMap, HashSet};
 
-use rand::*;
+// use rand::*;
 use piston_window::*;
+use piston_window::texture::UpdateTexture;
+use conrod::*;
 
 use postac::*;
 
+const WIDTH: u32 = 800;
+const HEIGHT: u32 = 600;
+
 fn main() {
-    let mut window: PistonWindow = WindowSettings::new("D&D", [800, 600])
+    let mut window: PistonWindow = WindowSettings::new("D&D", [WIDTH, HEIGHT])
         .exit_on_esc(true)
         .build()
         .unwrap();
-    let mut glyphs = Glyphs::new(
-        "assets/FiraSans-Regular.ttf",
-        window.factory.clone(),
-        TextureSettings::new(),
-    ).unwrap();
+    let mut ui = UiBuilder::new([WIDTH as _, HEIGHT as _])
+        .theme(Theme {
+            label_color: conrod::color::WHITE,
+            ..Theme::default()
+        })
+        .build();
+    ui.fonts
+        .insert_from_file("assets/FiraSans-Regular.ttf")
+        .unwrap();
+    let mut text_vertex_data = Vec::new();
+    let (mut glyph_cache, mut text_texture_cache) = {
+        const SCALE_TOLERANCE: f32 = 0.1;
+        const POSITION_TOLERANCE: f32 = 0.1;
+        let cache =
+            conrod::text::GlyphCache::new(WIDTH, HEIGHT, SCALE_TOLERANCE, POSITION_TOLERANCE);
+        let buffer_len = WIDTH as usize * HEIGHT as usize;
+        let init = vec![128; buffer_len];
+        let settings = TextureSettings::new();
+        let factory = &mut window.factory;
+        let texture = G2dTexture::from_memory_alpha(factory, &init, WIDTH, HEIGHT, &settings)
+            .unwrap();
+        (cache, texture)
+    };
+    let image_map = conrod::image::Map::new();
+
+    widget_ids!{
+        struct Ids {
+            canvas,
+            imie,
+            poziom,
+            doswiadczenie,
+            kasa,
+            klasa,
+            rasa,
+            charakter,
+            bostwo,
+            wyglad,
+            podstawowe_atrybuty,
+            zycie_max,
+            zycie,
+            stluczenia,
+            klasa_pancerza,
+            umiejetnosci,
+            atuty,
+            inicjatywa,
+            rzuty_obronne,
+            zwarcie,
+            jezyki,
+            bronie,
+            wyposazenie,
+            ekwipunek_schowany,
+        }
+    }
+    let ids = Ids::new(ui.widget_id_generator());
+
     let postac = Postac::new(
         "Ao Dojo",
         (0, 0, 12, 0),
@@ -42,64 +98,77 @@ fn main() {
         HashMap::new(),
         HashSet::new(),
     );
-    println!("Witaj, {:?}!", postac);
-    println!("Twoja siła to: {}", postac.podstawowe_atrybuty.sila);
-    println!(
-        "Twój modyfikator siły to: {}",
-        modyfikator(postac.podstawowe_atrybuty).sila
-    );
-    let mut rng = thread_rng();
-    for i in 0..4 {
-        let rzut = rng.gen_range::<u8>(1, 21);
-        println!("Rzut {}.: {}", i + 1, rzut);
-    }
-    let mut new_game_pressed = false;
-    let mut left_pressed = false;
+    // println!("Witaj, {:?}!", postac);
+    // println!("Twoja siła to: {}", postac.podstawowe_atrybuty.sila);
+    // println!(
+    //     "Twój modyfikator siły to: {}",
+    //     modyfikator(postac.podstawowe_atrybuty).sila
+    // );
+    while let Some(event) = window.next() {
+        let size = window.size();
+        let (w, h) = (size.width as conrod::Scalar, size.height as conrod::Scalar);
+        if let Some(event) = conrod::backend::piston::event::convert(event.clone(), w, h) {
+            ui.handle_event(event);
+        }
 
-    while let Some(e) = window.next() {
-        e.press(|b| {
-            match b {
-                Button::Mouse(MouseButton::Left) => left_pressed = true,
-                Button::Mouse(MouseButton::Right) => println!("zycze milego dnia, takze spada"),
-                _ => (),
+        event.update(|_| {
+            let mut ui = ui.set_widgets();
+            conrod::widget::Canvas::new()
+                .pad(30.0)
+                .set(ids.canvas, &mut ui);
+            conrod::widget::Text::new(&format!("Imię: {}", postac.imie))
+                .top_left_of(ids.canvas)
+                .set(ids.imie, &mut ui);
+            conrod::widget::Text::new(&format!("Poziom: {}", postac.poziom))
+                .down_from(ids.imie, 20.0)
+                .set(ids.poziom, &mut ui);
+            conrod::widget::Text::new(&format!("Klasa: {}", postac.klasa.nazwa))
+                .down_from(ids.poziom, 20.0)
+                .set(ids.klasa, &mut ui);
+        });
+
+        window.draw_2d(&event, |context, graphics| {
+            if let Some(primitives) = ui.draw_if_changed() {
+
+                // A function used for caching glyphs to the texture cache.
+                let cache_queued_glyphs = |graphics: &mut G2d,
+                                           cache: &mut G2dTexture,
+                                           rect: conrod::text::rt::Rect<u32>,
+                                           data: &[u8]| {
+                    let offset = [rect.min.x, rect.min.y];
+                    let size = [rect.width(), rect.height()];
+                    let format = piston_window::texture::Format::Rgba8;
+                    let encoder = &mut graphics.encoder;
+                    text_vertex_data.clear();
+                    text_vertex_data.extend(data.iter().flat_map(|&b| vec![255, 255, 255, b]));
+                    UpdateTexture::update(
+                        cache,
+                        encoder,
+                        format,
+                        &text_vertex_data[..],
+                        offset,
+                        size,
+                    ).expect("failed to update texture")
+                };
+
+                // Specify how to get the drawable texture from the image. In this case, the image
+                // *is* the texture.
+                fn texture_from_image<T>(img: &T) -> &T {
+                    img
+                }
+
+                // Draw the conrod `render::Primitives`.
+                conrod::backend::piston::draw::primitives(
+                    primitives,
+                    context,
+                    graphics,
+                    &mut text_texture_cache,
+                    &mut glyph_cache,
+                    &image_map,
+                    cache_queued_glyphs,
+                    texture_from_image,
+                );
             }
-        });
-        e.release(|b| {
-            match b {
-                Button::Mouse(MouseButton::Left) => left_pressed = false,
-                _ => (),
-            }
-        });
-        e.mouse_cursor(|x, y| {
-            let (w, h) = window.draw_size().into();
-            let (w, h) = (w as f64, h as f64);
-            new_game_pressed = 
-                left_pressed && 
-                x > (w / 4.) && x < (w * 3. / 4.) &&
-                y > (h / 4.) && y < (h * 2. / 4.);
-        });
-        window.draw_2d(&e, |c, g| {
-            let size = c.viewport.unwrap().window_size;
-            let (x, y) = (size[0] as f64, size[1] as f64);
-            clear([0., 0., 0., 1.], g);
-            let color = if !new_game_pressed {
-                [0., 0., 0.7, 1.]
-            } else {
-                [0., 0.4, 0.4, 1.]
-            };
-            rectangle(
-                color,
-                [x / 4., y / 4., x / 2., y / 4.],
-                c.transform,
-                g,
-            );
-            text::Text::new_color([1., 1., 1., 1.], (x / 30.) as _).draw(
-                "New game",
-                &mut glyphs,
-                &c.draw_state,
-                c.transform.trans(x * 3. / 8., y * 3. / 8.),
-                g
-            ).unwrap();
         });
     }
 }
